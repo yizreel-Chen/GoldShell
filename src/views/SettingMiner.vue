@@ -160,7 +160,10 @@
               >
                 <v-select
                     :items="rgb_modules"
-                    @change="setMode('0x01')"
+                    item-value="value"
+                    v-model="selectedMode"
+
+                    @change="testMode"
                 ></v-select>
               </v-col>
 
@@ -174,17 +177,17 @@
             <v-row>
               <v-col class="pr-4">
                 <v-slider
-                    v-model="slider"
                     class="align-center"
                     :max="max"
                     :min="min"
-                    value=""
                     hide-details
-                    @change="brightnessValue=setBrightness('0xff')"
+                    ticks:true
+                    v-model="selectedBrightness"
+                    @change="testBrightness"
                 >
                   <template v-slot:append>
                     <v-text-field
-                        v-model="slider"
+                        v-model="selectedBrightness"
                         class="mt-0 pt-0"
                         hide-details
                         single-line
@@ -198,22 +201,22 @@
           </v-card-text>
 
           <!-- 速度控制 -->
-
           <v-subheader>{{ $t('SPEED_SELECT') }}</v-subheader>
           <v-card-text>
             <v-slider
-                v-model="speed"
+                v-model="selectedSpeed"
                 :tick-labels="speedLables"
                 :max="2"
                 step="1"
                 ticks="always"
                 tick-size="3"
-                @change="speedValue = setSpeed('0x10')"
+                @change="testSpeed"
             ></v-slider>
           </v-card-text>
 
 
-          <v-btn text color="primary" @click="sendData(modeValue,brightnessValue,speedValue)" >{{ $t('MINER_APPLY') }}</v-btn>
+          <v-btn text color="primary" @click="socketMsg()" >{{ $t('MINER_APPLY') }}</v-btn>
+          <v-btn text color="primary" @click="closeRGB()" >{{ $t('CLOSE_ARGB') }}</v-btn>
 
         </v-container>
 
@@ -229,38 +232,44 @@
 
 </template>
 
-<script >
-import { mapGetters } from 'vuex'
-import { getmcbsetting, getmcbpools, getmcbalgosetting, setmcbsetting, setmcbalgosetting, deletepool, setmcbpools, setmcbnewpool, gettutorial } from '../api/mcb'
+<script>
+// 改动
+import socketio from 'socket.io-client' //引入socket.io-client
+
+import {mapGetters} from 'vuex'
+import {
+  deletepool,
+  getmcbalgosetting,
+  getmcbpools,
+  getmcbsetting,
+  gettutorial,
+  setmcbalgosetting,
+  setmcbnewpool,
+  setmcbpools,
+  setmcbsetting
+} from '../api/mcb'
 import draggable from 'vuedraggable'
 import Lock from '../components/Lock.vue'
 
-/* 十六进制字符串 -> 十进制数字 */
-function parseHex(str) {
-  return parseInt(str,16);
-}
-
-
 /* 十进制数字 -> 十六进制数字 */
-function decToHex(params) {
-  typeof params == "string" ? params = Number(params) : ''
-  return '0x' + params.toString(16);
-}
+// function decToHex(params) {
+//   typeof params == "string" ? params = Number(params) : ''
+//   return '0x' + params.toString(16);
+// }
 
-/* 获取校验码 */
-function getCheckCode(start,type,mode,brightness,speed,) {
-  let result = (start ^ type);
-  result ^= mode;
-  result ^= brightness;
-  result ^= speed;
-  return  '0x' + result.toString(16);
-}
 
 export default {
+  name: 'HelloWorld',
+  props: {
+
+    msg: String
+  },
+
   components: {
     draggable,
     Lock
   },
+
   data() {
     return {
       valid: false,
@@ -296,17 +305,22 @@ export default {
         viabtc: require('../assets/images/pools/viabtc.svg'),
         poolin: require('../assets/images/pools/poolin.svg')
       },
+      modeValue: 0x01,
+      brightnessValue: 0xff,
+      speedValue: 0x10,
 
       /* 亮度调节 */
       min: 0,
       max: 255,
-      slider: 40,
-      /* 速度调节 */
-      speed:0,
+      lightness: 128,
 
-      modeValue:0x01,
-      brightnessValue:0xff,
-      speedValue:0x10,
+      /* 选中的模式 */
+      selectedMode: {},
+      /* 选中的亮度 */
+      selectedBrightness: {},
+      selectedBrightnessLable:{},
+      /* 选中的速度 */
+      selectedSpeed: {},
     }
   },
   computed: {
@@ -317,23 +331,27 @@ export default {
     /* 模式调节 */
     rgb_modules() {
       return [
-        this.$t('COLORFUL_LOOP_MODE'),
-        this.$t('LIGHT_TRACKING_MODE'),
-        this.$t('ENERGY_MODE'),
-        this.$t('ACCUMULATION_MODE'),
-        this.$t('BREATHING_MODE'),
-        this.$t('GRADIENT_MODE'),
-        this.$t('TAI_CHI_ROTATION_MODE'),
-        this.$t('COLORFUL_STREAMERS'),
+        {text: this.$t('COLORFUL_LOOP_MODE'), value: 0x00},
+        {text: this.$t('LIGHT_TRACKING_MODE'), value: 0x01},
+        {text: this.$t('ENERGY_MODE'), value: 0x02},
+        {text: this.$t('ACCUMULATION_MODE'), value: 0x03},
+        {text: this.$t('BREATHING_MODE'), value: 0x04},
+        {text: this.$t('GRADIENT_MODE'), value: 0x05},
+        {text: this.$t('TAI_CHI_ROTATION_MODE'), value: 0x06},
+        {text: this.$t('COLORFUL_STREAMERS'), value: 0x07},
       ]
     },
+
+
     speedLables() {
       return [
-        this.$t('SLOW_SPEED'),
-        this.$t('MEDIUM_SPEED'),
-        this.$t('FAST_SPEED'),
+        {text: this.$t('SLOW_SPEED'), value: 0x10},
+        {text: this.$t('MEDIUM_SPEED'), value: 0x80},
+        {text: this.$t('FAST_SPEED'), value: 0xf0}
       ]
     },
+
+
 
   },
   created() {
@@ -352,7 +370,9 @@ export default {
     }
     this.ws.onmessage = (evt) => {
       this.pools = JSON.parse(evt.data)
-    }
+    },
+
+        this.socketMsg()
   },
   methods: {
     pageInit() {
@@ -524,69 +544,70 @@ export default {
       }
     },
 
-
-    /* 设置亮度状态码（Hex）*/
-    setBrightness(brightness) {
-      return decToHex(parseHex(brightness));
-      // eslint-disable-next-line no-unreachable
+    testMode() {
+      console.log(this.selectedMode)
     },
 
-    /* 设置速度状态码(Hex) */
-    setSpeed(speed) {
-      return decToHex(parseHex(speed));
+    testBrightness() {
+      console.log(this.selectedBrightness)
     },
 
-    /* 设置模式状态码 */
-    setMode(mode) {
-      return decToHex(parseHex(mode));
+    testSpeed() {
+      console.log(this.selectedSpeed)
     },
 
-    /* 发送数据 */
-    sendData(mode,brightness,speed) {
-      const SerialPort = require("serialport");
-      let checkCode = getCheckCode(0xaa,0x01,mode,brightness,speed);
-      const data = [0xaa, 0x01, mode, brightness, speed, checkCode];
-      let serialPort = new SerialPort( //设置串口属性
 
-          "COM3", {
+    socketMsg() {
 
-            baudRate: 9600, //波特率
+      /* 设置模式、亮度、速度 */
+    let mode = '0x0' + this.selectedMode.toString(16);
+    let brightness = '0x' + this.selectedBrightness.toString(16);
+    let speed;
+    if (this.selectedSpeed === 0) {speed = '0xff'}
+    if (this.selectedSpeed === 1) {speed = '0x80'}
+    if (this.selectedSpeed === 2) {speed = '0x10'}
 
-            dataBits: 8, //数据位
 
-            parity: 'none', //奇偶校验
+      //因为是本地测试，所以地址是我本地的，这里替换成你们服务的实际地址即可
+      let io = socketio('http://localhost:3000', {
 
-            stopBits: 2, //停止位
-
-            flowControl: false ,
-
-            autoOpen:false // 自动打开
-
-          }, false);
-
-      serialPort.open();
-
-      serialPort.on('open',() => {
-        console.log("串口已打开，准备写入数据")
-        serialPort.write(data);
+        //transports和服务端统一，否则会跨域
+        transports: ['websocket']
       })
 
-      serialPort.on('readable', function () {
-        console.log('Data:', serialPort.read())
+      //向服务端发送 类型1消息
+      io.emit('typeOneInstruction', mode,brightness,speed);
+
+      // 服务器端发送成功，向前端返回AA，并在控制台打印
+      io.on('successfulCall', data => {
+        console.log(data.msg);
       })
 
+    },
 
-      serialPort.on('data',(data) => {
+    closeRGB() {
+      //因为是本地测试，所以地址是我本地的，这里替换成你们服务的实际地址即可
+      let io = socketio('http://localhost:3000', {
 
-        console.log("命令已经发出")
-        console.log("回应的数据: " + data)
-        serialPort.close();
+        //transports和服务端统一，否则会跨域
+        transports: ['websocket']
       })
+
+      //向服务端发送 类型1消息
+      io.emit('closeRGB');
+
+      // 服务器端发送成功，向前端返回AA，并在控制台打印
+      io.on('successfulCall', data => {
+        console.log(data.msg);
+      })
+
     }
+
+  }
+
   }
 
 
-}
 </script>
 
 <style lang="scss">
